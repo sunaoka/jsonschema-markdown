@@ -3,7 +3,7 @@ from pathlib import Path
 import i18n
 
 
-LOCALE_DIR = Path(__file__).resolve().parent.parent / "locales"
+LOCALE_DIR = Path(__file__).resolve().parent / "locales"
 
 i18n.set("file_format", "json")
 i18n.set("filename_format", "{locale}.{format}")
