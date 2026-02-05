@@ -6,6 +6,7 @@ import urllib.parse
 import yaml
 from loguru import logger
 
+from jsonschema_markdown.i18n import _, set_locale
 from jsonschema_markdown.utils import (
     create_const_markdown,
     create_enum_markdown,
@@ -69,12 +70,12 @@ def _get_schema_header(
     # Add examples if present
     examples = schema.get("examples", [])
     if examples:
-        md += f"{prefix}### Examples\n\n"
+        md += f"{prefix}### {_('Examples')}\n\n"
         for example in examples:
             md += _format_example(example, examples_format, sort_yaml_keys)
             md += "\n\n"
 
-    md += f"{prefix}### Type: `{schema.get('type', 'object(?)').strip()}`\n\n"
+    md += f"{prefix}### {_('Type')}: `{schema.get('type', 'object(?)').strip()}`\n\n"
 
     return md
 
@@ -88,6 +89,7 @@ def generate(
     hide_empty_columns: bool = False,
     examples_format: str = "text",
     sort_yaml_keys: bool = False,
+    locale: str = "en",
 ) -> str:
     """
     Generate a markdown string from a given JSON schema.
@@ -101,10 +103,14 @@ def generate(
         hide_empty_columns: Whether to hide empty columns in the output.
         examples_format: Format of the examples in the output (text, yaml, json).
         sort_yaml_keys: Whether to sort keys when formatting YAML examples.
+        locale: Locale identifier (e.g. "ja_JP", "en") for text translations.
 
     Returns:
         str: The generated markdown string.
     """
+
+    set_locale(locale)
+
     # Set the log level
     if debug:
         logger.remove()
@@ -125,7 +131,9 @@ def generate(
     markdown += _get_schema_header(
         _schema,
         title,
-        "JSON Schema missing a description, provide it using the `description` key in the root of the JSON document.",
+        _(
+            "JSON Schema missing a description, provide it using the `description` key in the root of the JSON document."
+        ),
         examples_format=examples_format,
         sort_yaml_keys=sort_yaml_keys,
     )
@@ -136,12 +144,12 @@ def generate(
     )
 
     if defs:
-        markdown += "\n---\n\n# Definitions\n\n"
+        markdown += f"\n---\n\n# {_('Definitions')}\n\n"
         for key, definition in defs.items():
             markdown += _get_schema_header(
                 definition,
                 key,
-                "No description provided for this model.",
+                _("No description provided for this model."),
                 nested=True,
                 examples_format=examples_format,
                 sort_yaml_keys=sort_yaml_keys,
@@ -152,7 +160,7 @@ def generate(
 
     if footer:
         # Add timestamp and a link to the project
-        markdown += "\n---\n\nMarkdown generated with [jsonschema-markdown](https://github.com/elisiariocouto/jsonschema-markdown)."
+        markdown += f"\n---\n\n{_('Markdown generated with')} [jsonschema-markdown](https://github.com/elisiariocouto/jsonschema-markdown)."
 
     res = markdown.strip(" \n")
     res += "\n"
@@ -280,7 +288,7 @@ def _create_definition_table(schema: dict, defs: dict, hide_empty_columns: bool)
 
     # Add a warning before the table to indicate if additional properties are allowed
     if not schema.get("additionalProperties", True):
-        markdown += "> ⚠️ Additional properties are not allowed.\n\n"
+        markdown += _("> ⚠️ Additional properties are not allowed.\n\n")
 
     if not schema.get("properties"):
         return markdown
@@ -316,7 +324,9 @@ def _create_definition_table(schema: dict, defs: dict, hide_empty_columns: bool)
 
         # Generate the header row
         capitalized_columns = [
-            col.replace("_", " ").capitalize() for col in columns if include_column[col]
+            _(col.replace("_", " ").capitalize())
+            for col in columns
+            if include_column[col]
         ]
         markdown += "| " + " | ".join(capitalized_columns) + " |\n"
         # Generate the separator row
@@ -336,7 +346,7 @@ def _create_definition_table(schema: dict, defs: dict, hide_empty_columns: bool)
     else:
         # Generate the header row
         capitalized_columns = [
-            col.replace("_", " ").capitalize() for col in table_items[0]
+            _(col.replace("_", " ").capitalize()) for col in table_items[0]
         ]
         markdown += "| " + " | ".join(capitalized_columns) + " |\n"
 
@@ -414,7 +424,7 @@ def _handle_array_like_property(
         # https://json-schema.org/understanding-json-schema/reference/array
         return f"`{property_type}`", {}
 
-    array_separator = {"oneOf": " or ", "anyOf": " and/or ", "allOf": " and "}
+    array_separator = {"oneOf": _(" or "), "anyOf": _(" and/or "), "allOf": _(" and ")}
 
     removed_null = False
     with contextlib.suppress(Exception):
@@ -456,7 +466,7 @@ def _handle_array_like_property(
         if "`null`" in types:
             types.remove("`null`")
             types.append("`null`")
-        return " or ".join(types), array_separator[array_type].join(sorted(details))
+        return _(" or ").join(types), array_separator[array_type].join(sorted(details))
 
 
 def _get_property_details(
@@ -493,7 +503,7 @@ def _get_property_details(
             return t, d
 
     if property_details.get("items") == {}:
-        return f"`{property_type}`", "Any type"
+        return f"`{property_type}`", _("Any type")
 
     if "items" in property_details:
         if any(key in property_details["items"] for key in ["oneOf", "anyOf", "allOf"]):
@@ -544,7 +554,7 @@ def _get_property_details(
 
         if min_details == "" and max_details == "":
             # fallback to original property_type when no range is specified
-            res_details = property_type
+            res_details = _(property_type)
         else:
             res_details = f"`{min_details} x {max_details}`"
 
@@ -561,21 +571,27 @@ def _get_property_details(
         if _format:
             return (
                 f"`{property_type}`",
-                f"Format: [`{_format}`](https://json-schema.org/understanding-json-schema/reference/string#built-in-formats)",
+                f"{_('Format')}: [`{_format}`](https://json-schema.org/understanding-json-schema/reference/string#built-in-formats)",
             )
         elif _max_length or _min_length:
             if _max_length and _min_length:
                 return (
                     f"`{property_type}`",
-                    f"Length: `{_min_length} <= string <= {_max_length}`",
+                    f"{_('Length')}: `{_min_length} <= {_('string')} <= {_max_length}`",
                 )
             elif _max_length:
-                return f"`{property_type}`", f"Length: `string <= {_max_length}`"
+                return (
+                    f"`{property_type}`",
+                    f"{_('Length')}: `{_('string')} <= {_max_length}`",
+                )
             elif _min_length:
-                return f"`{property_type}`", f"Length: `string >= {_min_length}`"
+                return (
+                    f"`{property_type}`",
+                    f"{_('Length')}: `{_('string')} >= {_min_length}`",
+                )
             else:
-                return f"`{property_type}`", property_type
+                return f"`{property_type}`", _(property_type)
         else:
-            return f"`{property_type}`", property_type
+            return f"`{property_type}`", _(property_type)
     else:
-        return f"`{property_type}`", property_type
+        return f"`{property_type}`", _(property_type)

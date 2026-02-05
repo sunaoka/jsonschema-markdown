@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from jsonschema_markdown import generate
 from tests.model import Car
 
@@ -82,3 +84,12 @@ def test_generate_yaml_format_default_preserves_order():
     z_pos = markdown.index("z_field")
     a_pos = markdown.index("a_field")
     assert z_pos < a_pos
+
+
+def test_generate_applies_locale_setting():
+    schema = Car.model_json_schema()
+
+    with patch("jsonschema_markdown.converter.markdown.set_locale") as mock_set_locale:
+        generate(schema, locale="en")
+
+    mock_set_locale.assert_called_once_with("en")

@@ -55,6 +55,13 @@ import jsonschema_markdown
     show_default=True,
     help="Sort keys in YAML examples. Only applies when --examples-format is yaml.",
 )
+@click.option(
+    "--locale",
+    type=str,
+    default="en",
+    show_default=True,
+    help="Locale identifier for translations.",
+)
 @click.version_option(package_name="jsonschema_markdown")
 def cli(
     filename,
@@ -65,6 +72,7 @@ def cli(
     debug,
     examples_format,
     sort_yaml_keys,
+    locale,
 ):
     """
     Load FILENAME and output a markdown version.
@@ -81,6 +89,7 @@ def cli(
         "hide_empty_columns": not empty_columns,
         "examples_format": examples_format,
         "sort_yaml_keys": sort_yaml_keys,
+        "locale": locale,
     }
 
     if title:
