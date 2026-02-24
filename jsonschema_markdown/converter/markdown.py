@@ -274,16 +274,91 @@ def _process_properties_recursively(
             items_schema = prop_details["items"]
             if items_schema.get("type") == "object" and items_schema.get("properties"):
                 array_path = f"{full_path}[]"  # Add [] to indicate array items
-                nested_items = _process_properties_recursively(
-                    items_schema["properties"],
-                    array_path,
-                    items_schema.get("required", []),
-                    defs,
-                    conditional_properties,
-                )
-                table_items.extend(nested_items)
+                _combinator_key = _get_combinator_key(items_schema)
+                if _combinator_key is not None and all(
+                    _is_constraint_only(e) for e in items_schema[_combinator_key]
+                ):
+                    # The combinator entries are pure constraints (e.g. required only),
+                    # not type alternatives. Emit a single combined row for all properties.
+                    combined_name = _COMBINATOR_SEPARATORS[_combinator_key].join(
+                        f"{array_path}.{p}" for p in items_schema["properties"]
+                    )
+                    all_prop_types = []
+                    all_prop_values = []
+                    for _prop in items_schema["properties"].values():
+                        _p_type, _p_values = _get_property_details(
+                            _prop.get("type"), _prop, defs
+                        )
+                        all_prop_types.append(_p_type)
+                        all_prop_values.append(_p_values)
+                    distinct_types = {t for t in all_prop_types if t}
+                    if len(distinct_types) == 1:
+                        combined_type = next(iter(distinct_types))
+                        combined_values = next((v for v in all_prop_values if v), "")
+                    else:
+                        combined_type = (
+                            ", ".join(sorted(distinct_types)) if distinct_types else ""
+                        )
+                        combined_values = ""
+                    combined_item = {
+                        "property": combined_name,
+                        "type": combined_type,
+                        "required": "",
+                        "possible_values": combined_values,
+                        "deprecated": "",
+                        "default": "",
+                        "description": "",
+                        "examples": "",
+                    }
+                    if conditional_properties:
+                        combined_item["conditional"] = ""
+                    table_items.append(combined_item)
+                else:
+                    nested_items = _process_properties_recursively(
+                        items_schema["properties"],
+                        array_path,
+                        items_schema.get("required", []),
+                        defs,
+                        conditional_properties,
+                    )
+                    table_items.extend(nested_items)
 
     return table_items
+
+
+def _extract_all_conditionals(schema: dict, defs: dict, prefix: str = "") -> dict:
+    """
+    Recursively extract and process conditionals from a schema and all nested objects.
+
+    Args:
+        schema: The JSON schema to extract conditionals from.
+        defs: Definitions dictionary for resolving references.
+        prefix: Current property path prefix for nested objects (e.g. "address").
+
+    Returns:
+        A dict mapping full property paths (e.g. "address.postal_code") to lists of
+        conditional variant dictionaries, each containing condition, type,
+        possible_values, and required status.
+    """
+    conditional_properties = {}
+
+    # Extract conditionals at current level
+    conditionals = _extract_conditionals(schema)
+    if conditionals:
+        processed = _process_conditionals(conditionals, defs)
+        for prop_name, variants in processed.items():
+            full_path = f"{prefix}.{prop_name}" if prefix else prop_name
+            conditional_properties[full_path] = variants
+
+    # Recurse into nested object properties
+    properties = schema.get("properties", {})
+    for prop_name, prop_details in properties.items():
+        if isinstance(prop_details, dict) and prop_details.get("type") == "object":
+            full_path = f"{prefix}.{prop_name}" if prefix else prop_name
+            nested = _extract_all_conditionals(prop_details, defs, full_path)
+            conditional_properties.update(nested)
+
+    return conditional_properties
 
 
 def _create_definition_table(schema: dict, defs: dict, hide_empty_columns: bool) -> str:
@@ -325,11 +400,8 @@ def _create_definition_table(schema: dict, defs: dict, hide_empty_columns: bool)
     # Use the sort_properties function to maintain the order
     sorted_properties = sort_properties(schema)
 
-    # Extract and process conditionals
-    conditionals = _extract_conditionals(schema)
-    conditional_properties = {}
-    if conditionals:
-        conditional_properties = _process_conditionals(conditionals, defs)
+    # Extract and process conditionals from all levels (including nested objects)
+    conditional_properties = _extract_all_conditionals(schema, defs)
 
     # Process properties recursively instead of just the top level
     table_items = _process_properties_recursively(
@@ -432,6 +504,51 @@ def get_property_if_ref(property_details: dict, defs) -> tuple:
     return None, None
 
 
+_TYPE_INFO_KEYS = frozenset(
+    {
+        "type",
+        "$ref",
+        "properties",
+        "anyOf",
+        "oneOf",
+        "allOf",
+        "enum",
+        "const",
+        "items",
+        "pattern",
+        "format",
+        "additionalProperties",
+        "not",
+        "if",
+        "then",
+        "else",
+        "prefixItems",
+        "contains",
+        "patternProperties",
+        "propertyNames",
+        "contentEncoding",
+        "contentMediaType",
+        "contentSchema",
+    }
+)
+
+
+_COMBINATOR_SEPARATORS = {"oneOf": _(" or "), "anyOf": _(" and/or "), "allOf": _(" and ")}
+
+
+def _is_constraint_only(schema_entry: dict) -> bool:
+    """Return True if entry has only constraint keywords (e.g. required), no type info."""
+    return not any(key in schema_entry for key in _TYPE_INFO_KEYS)
+
+
+def _get_combinator_key(schema: dict) -> str | None:
+    """Return the first combinator keyword found in schema, or None."""
+    for key in ("oneOf", "anyOf", "allOf"):
+        if key in schema:
+            return key
+    return None
+
+
 def _handle_array_like_property(
     property_type: str, property_details: dict, defs: dict, is_array=False
 ):
@@ -440,17 +557,7 @@ def _handle_array_like_property(
     """
     # TODO: Refactor this function to be more readable, handle arrays in a separate function
 
-    array_type = (
-        "oneOf"
-        if "oneOf" in property_details
-        else (
-            "anyOf"
-            if "anyOf" in property_details
-            else "allOf"
-            if "allOf" in property_details
-            else None
-        )
-    )
+    array_type = _get_combinator_key(property_details)
 
     if array_type is None:
         logger.warning(
@@ -459,8 +566,6 @@ def _handle_array_like_property(
         # TODO: Support for items, prefixItems, contains, minContains, maxContains, uniqueItems, unevaluatedItems
         # https://json-schema.org/understanding-json-schema/reference/array
         return f"`{property_type}`", {}
-
-    array_separator = {"oneOf": _(" or "), "anyOf": _(" and/or "), "allOf": _(" and ")}
 
     removed_null = False
     with contextlib.suppress(Exception):
@@ -471,6 +576,8 @@ def _handle_array_like_property(
     details = []
 
     for value in property_details[array_type]:
+        if _is_constraint_only(value):
+            continue
         ref_type, ref_details = get_property_if_ref(value, defs)
         if ref_type or ref_details:
             types.append(ref_type)
@@ -494,15 +601,18 @@ def _handle_array_like_property(
 
     # Arrays should return the type as array
     # Other array-like properties should return the types of the nested oneOf, anyOf or allOf
+    non_null_details = sorted(d for d in details if d is not None)
     if return_type:
-        return return_type, array_separator[array_type].join(sorted(details))
+        return return_type, _COMBINATOR_SEPARATORS[array_type].join(non_null_details)
     else:
         # Dedeuplicate list of types, join them with null at the end if present
         types = sorted(set(types))
         if "`null`" in types:
             types.remove("`null`")
             types.append("`null`")
-        return _(" or ").join(types), array_separator[array_type].join(sorted(details))
+        return _(" or ").join(types), _COMBINATOR_SEPARATORS[array_type].join(
+            non_null_details
+        )
 
 
 def _extract_conditionals(schema: dict) -> list:
